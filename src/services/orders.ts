@@ -26,8 +26,9 @@ export class OrdersService {
     const o = parsed.data;
     try {
       const amountKop = toKop(parseRub(o.amount));
-      // amountPaid === 0 — валидная 100%-скидка, поэтому проверяем именно отсутствие поля
-      const amountPaidKop = o.amountPaid == null ? amountKop : toKop(parseRub(o.amountPaid));
+      // amountPaid === 0 — валидная 100%-скидка, поэтому проверяем именно отсутствие поля.
+      // Если поля нет — оплата неизвестна (NULL), а не «равна сумме до скидки».
+      const amountPaidKop = o.amountPaid == null ? null : toKop(parseRub(o.amountPaid));
       return {
         id: o.id,
         customerId: o.customerId,
@@ -46,12 +47,32 @@ export class OrdersService {
    * Применяет версию заказа (из синка или вебхука).
    * Вебхуки приходят с повторами и не по порядку, поэтому версию сохраняем,
    * только если она новее уже сохранённой (по updatedAt).
+   *
+   * Для старых строк оплата может быть неизвестна (NULL). Синк при той же версии
+   * добирает её из внешнего API, не трогая остальные поля. Вебхуки этого не делают,
+   * чтобы повтор события по-прежнему считался stale.
    */
-  async apply(raw: unknown): Promise<ApplyResult> {
+  async apply(raw: unknown, opts: { enrich?: boolean } = {}): Promise<ApplyResult> {
     const incoming = this.normalize(raw);
     const current = await this.orders.get(incoming.id);
-    if (current && current.updatedAt.getTime() >= incoming.updatedAt.getTime()) return "stale";
-    await this.orders.save(incoming);
-    return current ? "updated" : "created";
+    if (!current) {
+      await this.orders.save(incoming);
+      return "created";
+    }
+
+    const cmp = incoming.updatedAt.getTime() - current.updatedAt.getTime();
+    if (cmp < 0) return "stale";
+    if (cmp > 0) {
+      await this.orders.save(incoming);
+      return "updated";
+    }
+
+    // Старые строки могли не знать оплату (NULL). Добираем её из synced-данных,
+    // не трогая версию и остальные поля. Вебхуки сюда не заходят (opts.enrich).
+    if (opts.enrich && incoming.amountPaidKop !== null && current.amountPaidKop === null) {
+      await this.orders.setAmountPaid(incoming.id, incoming.amountPaidKop);
+      return "updated";
+    }
+    return "stale";
   }
 }

@@ -43,4 +43,25 @@ describe("POST /webhooks/order", () => {
     const res = await postWebhook(ctx.app, { id: "x" });
     expect(res.statusCode).toBe(400);
   });
+
+  it("повтор вебхука не обогащает неизвестную оплату", async () => {
+    const o = apiOrder({ amount: 1000, amountPaid: 900 });
+    await postWebhook(ctx.app, o);
+    await ctx.db.query(`UPDATE orders SET amount_paid_kop = NULL WHERE id = $1`, [o.id]);
+
+    expect((await postWebhook(ctx.app, o)).json()).toEqual({ result: "stale" });
+
+    const { rows } = await ctx.db.query(`SELECT amount_paid_kop FROM orders WHERE id = $1`, [o.id]);
+    expect(rows[0].amount_paid_kop).toBeNull();
+  });
+
+  it("версия без amountPaid не стирает известную оплату", async () => {
+    const o = apiOrder({ amount: 1000, amountPaid: 900 });
+    await postWebhook(ctx.app, o);
+
+    await postWebhook(ctx.app, { ...o, status: "refunded", amountPaid: undefined, updatedAt: "2026-02-12T00:00:00Z" });
+
+    const { rows } = await ctx.db.query(`SELECT amount_paid_kop FROM orders WHERE id = $1`, [o.id]);
+    expect(Number(rows[0].amount_paid_kop)).toBe(90000);
+  });
 });
