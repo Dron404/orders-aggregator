@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiOrder, dailyTotals, postWebhook, setupTestApp } from "./helpers.js";
 
 const ctx = setupTestApp();
+
+afterEach(() => vi.useRealTimers());
 
 describe("GET /customers/:id/daily-totals", () => {
   it("суммирует оплаченные заказы по дням в таймзоне клиента", async () => {
@@ -94,4 +96,44 @@ describe("GET /customers/:id/daily-totals", () => {
       { date: "2026-02-10", total: 1.44, gross: 1.44, discount: 0, net: 1.44 },
     ]);
   });
+
+  const berlinOrders = [
+    { amount: 100, createdAt: "2026-03-27T23:30:00Z" },
+    { amount: 200, createdAt: "2026-03-28T22:30:00Z" },
+    { amount: 300, createdAt: "2026-03-28T23:30:00Z" },
+    { amount: 400, createdAt: "2026-03-29T01:30:00Z" },
+    { amount: 500, createdAt: "2026-03-29T22:30:00Z" },
+    { amount: 600, createdAt: "2026-03-30T22:30:00Z" },
+    { amount: 700, createdAt: "2026-03-31T21:30:00Z" },
+  ];
+
+  const berlinExpected = [
+    { date: "2026-03-27", total: 0, gross: 0, discount: 0, net: 0 },
+    { date: "2026-03-28", total: 300, gross: 300, discount: 0, net: 300 },
+    { date: "2026-03-29", total: 700, gross: 700, discount: 0, net: 700 },
+    { date: "2026-03-30", total: 500, gross: 500, discount: 0, net: 500 },
+    { date: "2026-03-31", total: 1300, gross: 1300, discount: 0, net: 1300 },
+  ];
+
+  async function seedBerlinOrders() {
+    ctx.api.customers.set("c_7", "Europe/Berlin");
+    for (const o of berlinOrders) {
+      await postWebhook(ctx.app, apiOrder({ customerId: "c_7", ...o }));
+    }
+  }
+
+  it.each(["2026-03-20T12:00:00Z", "2026-07-01T12:00:00Z"])(
+    "раскладывает заказы по дням с учётом DST независимо от текущей даты (%s)",
+    async (now) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(now));
+      try {
+        await seedBerlinOrders();
+        const res = await dailyTotals(ctx.app, "c_7", "2026-03-27", "2026-03-31");
+        expect(res.json()).toEqual(berlinExpected);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
