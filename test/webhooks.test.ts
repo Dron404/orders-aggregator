@@ -10,6 +10,14 @@ describe("POST /webhooks/order", () => {
     expect(res.json()).toEqual({ result: "created" });
   });
 
+  it("сохраняет оплаченную сумму со скидкой", async () => {
+    const o = apiOrder({ amount: 1000, amountPaid: 900.5 });
+    await postWebhook(ctx.app, o);
+    const { rows } = await ctx.db.query(`SELECT amount_kop, amount_paid_kop FROM orders WHERE id = $1`, [o.id]);
+    expect(Number(rows[0].amount_kop)).toBe(100000);
+    expect(Number(rows[0].amount_paid_kop)).toBe(90050);
+  });
+
   it("повтор того же события ничего не меняет", async () => {
     const o = apiOrder();
     await postWebhook(ctx.app, o);
