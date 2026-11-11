@@ -34,6 +34,17 @@ export function dateAtOffset(at: Date, offsetMinutes: number): string {
   return new Date(at.getTime() + offsetMinutes * 60_000).toISOString().slice(0, 10);
 }
 
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+/** Календарная дата YYYY-MM-DD момента `at` в IANA-зоне. */
+export function localDate(at: Date, timeZone: string): string {
+  const f = FORMATTERS.get(timeZone) ?? new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  FORMATTERS.set(timeZone, f);
+  return f.format(at);
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function isCalendarDate(s: unknown): s is string {

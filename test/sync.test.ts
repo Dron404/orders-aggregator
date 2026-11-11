@@ -35,11 +35,28 @@ describe("POST /sync", () => {
   });
 
   it("строковые суммы и даты без зоны", async () => {
-    const o = apiOrder({ amount: "2500.00", createdAt: "2026-02-10T21:30:00" });
+    const o = apiOrder({ amount: "2500.00", amountPaid: "2087.50", createdAt: "2026-02-10T21:30:00" });
     ctx.api.pages.set(null, { items: [o], nextCursor: null });
     await ctx.app.inject({ method: "POST", url: "/sync" });
-    const { rows } = await ctx.db.query(`SELECT amount_kop, created_at FROM orders WHERE id = $1`, [o.id]);
+    const { rows } = await ctx.db.query(`SELECT amount_kop, amount_paid_kop, created_at FROM orders WHERE id = $1`, [o.id]);
     expect(Number(rows[0].amount_kop)).toBe(250000);
+    expect(Number(rows[0].amount_paid_kop)).toBe(208750);
     expect(rows[0].created_at.toISOString()).toBe("2026-02-10T21:30:00.000Z");
+  });
+
+  it("обогащает неизвестную оплату при той же версии", async () => {
+    const o = apiOrder({ amount: 1000, amountPaid: 900 });
+    ctx.api.pages.set(null, { items: [o], nextCursor: null });
+    await ctx.app.inject({ method: "POST", url: "/sync" });
+
+    // эмулируем старую строку: оплата была неизвестна
+    await ctx.db.query(`UPDATE orders SET amount_paid_kop = NULL WHERE id = $1`, [o.id]);
+
+    const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+    expect(res.json()).toMatchObject({ applied: 1, stale: 0 });
+
+    const { rows } = await ctx.db.query(`SELECT amount_paid_kop, updated_at FROM orders WHERE id = $1`, [o.id]);
+    expect(Number(rows[0].amount_paid_kop)).toBe(90000);
+    expect(rows[0].updated_at.toISOString()).toBe("2026-02-10T12:00:00.000Z");
   });
 });

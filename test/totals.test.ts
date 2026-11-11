@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiOrder, dailyTotals, postWebhook, setupTestApp } from "./helpers.js";
 
 const ctx = setupTestApp();
+
+afterEach(() => vi.useRealTimers());
 
 describe("GET /customers/:id/daily-totals", () => {
   it("суммирует оплаченные заказы по дням в таймзоне клиента", async () => {
@@ -13,9 +15,9 @@ describe("GET /customers/:id/daily-totals", () => {
     const res = await dailyTotals(ctx.app, "c_1", "2026-02-09", "2026-02-11");
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([
-      { date: "2026-02-09", total: 0 },
-      { date: "2026-02-10", total: 1000 },
-      { date: "2026-02-11", total: 349 },
+      { date: "2026-02-09", total: 0, gross: 0, discount: 0, net: 0 },
+      { date: "2026-02-10", total: 1000, gross: 1000, discount: 0, net: 1000 },
+      { date: "2026-02-11", total: 349, gross: 349, discount: 0, net: 349 },
     ]);
   });
 
@@ -24,7 +26,7 @@ describe("GET /customers/:id/daily-totals", () => {
     await postWebhook(ctx.app, apiOrder({ amount: 700, status: "pending" }));
     await postWebhook(ctx.app, apiOrder({ amount: 900, status: "refunded" }));
     const res = await dailyTotals(ctx.app, "c_1", "2026-02-10", "2026-02-10");
-    expect(res.json()).toEqual([{ date: "2026-02-10", total: 500 }]);
+    expect(res.json()).toEqual([{ date: "2026-02-10", total: 500, gross: 500, discount: 0, net: 500 }]);
   });
 
   it("учитывает только заказы этого клиента", async () => {
@@ -32,7 +34,7 @@ describe("GET /customers/:id/daily-totals", () => {
     await postWebhook(ctx.app, apiOrder({ amount: 500 }));
     await postWebhook(ctx.app, apiOrder({ amount: 800, customerId: "c_2" }));
     const res = await dailyTotals(ctx.app, "c_2", "2026-02-10", "2026-02-10");
-    expect(res.json()).toEqual([{ date: "2026-02-10", total: 800 }]);
+    expect(res.json()).toEqual([{ date: "2026-02-10", total: 800, gross: 800, discount: 0, net: 800 }]);
   });
 
   it("таймзона клиента берётся из API один раз", async () => {
@@ -52,4 +54,86 @@ describe("GET /customers/:id/daily-totals", () => {
     const res = await dailyTotals(ctx.app, "nobody", "2026-02-10", "2026-02-10");
     expect(res.statusCode).toBe(404);
   });
+
+  it("отдаёт gross, discount и net по скидке", async () => {
+    await postWebhook(ctx.app, apiOrder({ amount: 1000, amountPaid: 900 }));
+    const res = await dailyTotals(ctx.app, "c_1", "2026-02-10", "2026-02-10");
+    expect(res.json()).toEqual([
+      { date: "2026-02-10", total: 1000, gross: 1000, discount: 100, net: 900 },
+    ]);
+  });
+
+  it("суммирует скидки по разным заказам одного дня", async () => {
+    await postWebhook(ctx.app, apiOrder({ amount: 1000, amountPaid: 900 }));
+    await postWebhook(ctx.app, apiOrder({ amount: 250, amountPaid: 250 }));
+    const res = await dailyTotals(ctx.app, "c_1", "2026-02-10", "2026-02-10");
+    expect(res.json()).toEqual([
+      { date: "2026-02-10", total: 1250, gross: 1250, discount: 100, net: 1150 },
+    ]);
+  });
+
+  it("принимает amountPaid строкой", async () => {
+    await postWebhook(ctx.app, apiOrder({ amount: "1000.00", amountPaid: "900.50" }));
+    const res = await dailyTotals(ctx.app, "c_1", "2026-02-10", "2026-02-10");
+    expect(res.json()).toEqual([
+      { date: "2026-02-10", total: 1000, gross: 1000, discount: 99.5, net: 900.5 },
+    ]);
+  });
+
+  it("без amountPaid считает оплату равной сумме до скидки", async () => {
+    await postWebhook(ctx.app, apiOrder({ amount: 700 }));
+    const res = await dailyTotals(ctx.app, "c_1", "2026-02-10", "2026-02-10");
+    expect(res.json()).toEqual([
+      { date: "2026-02-10", total: 700, gross: 700, discount: 0, net: 700 },
+    ]);
+  });
+
+  it("считает копейки без потерь на float", async () => {
+    await postWebhook(ctx.app, apiOrder({ amount: 0.29, amountPaid: 0.29 }));
+    await postWebhook(ctx.app, apiOrder({ amount: 1.15, amountPaid: 1.15 }));
+    const res = await dailyTotals(ctx.app, "c_1", "2026-02-10", "2026-02-10");
+    expect(res.json()).toEqual([
+      { date: "2026-02-10", total: 1.44, gross: 1.44, discount: 0, net: 1.44 },
+    ]);
+  });
+
+  const berlinOrders = [
+    { amount: 100, createdAt: "2026-03-27T23:30:00Z" },
+    { amount: 200, createdAt: "2026-03-28T22:30:00Z" },
+    { amount: 300, createdAt: "2026-03-28T23:30:00Z" },
+    { amount: 400, createdAt: "2026-03-29T01:30:00Z" },
+    { amount: 500, createdAt: "2026-03-29T22:30:00Z" },
+    { amount: 600, createdAt: "2026-03-30T22:30:00Z" },
+    { amount: 700, createdAt: "2026-03-31T21:30:00Z" },
+  ];
+
+  const berlinExpected = [
+    { date: "2026-03-27", total: 0, gross: 0, discount: 0, net: 0 },
+    { date: "2026-03-28", total: 300, gross: 300, discount: 0, net: 300 },
+    { date: "2026-03-29", total: 700, gross: 700, discount: 0, net: 700 },
+    { date: "2026-03-30", total: 500, gross: 500, discount: 0, net: 500 },
+    { date: "2026-03-31", total: 1300, gross: 1300, discount: 0, net: 1300 },
+  ];
+
+  async function seedBerlinOrders() {
+    ctx.api.customers.set("c_7", "Europe/Berlin");
+    for (const o of berlinOrders) {
+      await postWebhook(ctx.app, apiOrder({ customerId: "c_7", ...o }));
+    }
+  }
+
+  it.each(["2026-03-20T12:00:00Z", "2026-07-01T12:00:00Z"])(
+    "раскладывает заказы по дням с учётом DST независимо от текущей даты (%s)",
+    async (now) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(now));
+      try {
+        await seedBerlinOrders();
+        const res = await dailyTotals(ctx.app, "c_7", "2026-03-27", "2026-03-31");
+        expect(res.json()).toEqual(berlinExpected);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
