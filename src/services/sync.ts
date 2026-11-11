@@ -42,7 +42,7 @@ export class SyncService {
         stats.received += page.items.length;
         for (const raw of page.items) {
           try {
-            const r = await this.orders.apply(raw);
+            const r = await this.orders.apply(raw, { enrich: true });
             if (r === "stale") stats.stale++;
             else stats.applied++;
           } catch (e) {

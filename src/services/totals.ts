@@ -40,7 +40,7 @@ export class TotalsService {
       const cur = sums.get(date);
       if (cur === undefined) continue;
       cur.grossKop += o.amountKop;
-      cur.netKop += o.amountPaidKop;
+      cur.netKop += o.amountPaidKop ?? o.amountKop;
     }
     return [...sums].map(([date, { grossKop, netKop }]) => ({
       date,
