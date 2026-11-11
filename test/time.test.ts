@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dateAtOffset, datesBetween, isCalendarDate, parseUtc, tzOffsetMinutes } from "../src/utils/time.js";
+import { dateAtOffset, datesBetween, isCalendarDate, localDate, parseUtc, tzOffsetMinutes } from "../src/utils/time.js";
 
 describe("parseUtc", () => {
   it("строка с Z", () => {
@@ -40,5 +40,29 @@ describe("даты", () => {
 
   it("datesBetween включает границы", () => {
     expect(datesBetween("2026-02-27", "2026-03-02")).toEqual(["2026-02-27", "2026-02-28", "2026-03-01", "2026-03-02"]);
+  });
+});
+
+describe("localDate", () => {
+  const berlin = (s: string) => localDate(new Date(s), "Europe/Berlin");
+
+  it("учитывает переход на летнее время", () => {
+    expect(berlin("2026-03-28T23:30:00Z")).toBe("2026-03-29");
+    expect(berlin("2026-03-29T00:30:00Z")).toBe("2026-03-29");
+    expect(berlin("2026-03-29T01:00:00Z")).toBe("2026-03-29");
+    expect(berlin("2026-03-29T01:30:00Z")).toBe("2026-03-29");
+    expect(berlin("2026-03-29T22:30:00Z")).toBe("2026-03-30");
+    expect(berlin("2026-03-30T22:30:00Z")).toBe("2026-03-31");
+  });
+
+  it("учитывает обратный перевод часов", () => {
+    expect(berlin("2026-10-25T00:30:00Z")).toBe("2026-10-25");
+    expect(berlin("2026-10-25T01:30:00Z")).toBe("2026-10-25");
+    expect(berlin("2026-10-25T23:30:00Z")).toBe("2026-10-26");
+  });
+
+  it("корректно работает в крайних часовых поясах", () => {
+    expect(localDate(new Date("2026-03-29T22:30:00Z"), "Pacific/Kiritimati")).toBe("2026-03-30");
+    expect(localDate(new Date("2026-03-29T22:30:00Z"), "Etc/GMT+12")).toBe("2026-03-29");
   });
 });
